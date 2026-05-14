@@ -1,5 +1,6 @@
-# Fine-Grained Urban Traffic Forecasting on Metropolis-Scale Road Networks
-[![arXiv](https://img.shields.io/badge/arXiv-2506.12345-b31b1b.svg)](https://arxiv.org/abs/2510.02278)
+# Metropolis-Scale Road Network Datasets for Fine-Grained Urban Traffic Modeling
+
+[![arXiv](https://shields.io/badge/arXiv-2510.02278-red.svg)](https://arxiv.org/abs/2510.02278)
 [![Kaggle Dataset](https://img.shields.io/badge/Dataset-Kaggle-blue.svg)](https://www.kaggle.com/datasets/mightyneghbor/city-traffic-benchmarks)
 
 
@@ -24,8 +25,6 @@ pip install -r requirements.txt
 ## Access to `city-traffic-M/L`
 1) To access the datasets, download the files from Kaggle -- [datasets page](https://www.kaggle.com/datasets/mightyneghbor/city-traffic-benchmarks).
 2) After download, place the files in the `data` directory
-
-**NOTE**: Croissant file for the dataset is available in `croissant` directory.
 
 ## Datasets specifications
 
@@ -144,6 +143,7 @@ DATASET=$CITY_TRAFFIC_M_SPEED
 
 
 ### Train models
+**Note!** The SVR-GNN model proposed in our work is implemented in our code via `--model_class=SingleInputGNN` and `--neighborhood_aggregation=MeanAggr`.
 
 Here is the example of launching main experiment:
 
