@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from dataset import Dataset
 from models import ModelRegistry
-from utils import Logger, get_parameter_groups, DummyHandler, NirvanaStateHandler, StateHandler
+from utils import Logger, get_parameter_groups, DummyHandler, StateHandler
 
 torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -256,12 +256,8 @@ def get_args(add_name: bool = True):
     parser.add_argument('--no_amp', default=False, action='store_true')
     parser.add_argument('--no_gradscaler', default=False, action='store_true')
     parser.add_argument('--num_threads', type=int, default=32)
-    parser.add_argument('--nirvana', default=False, action='store_true',
-                        help='Indicates that experiment is being run in Nirvana.')
     parser.add_argument('--disable_features_checkpointing', default=False, action='store_true',
                         help='Indicates whether to not to do checkpointing of features.')
-    parser.add_argument('--checkpoint_steps_interval', type=int, default=1000,
-                        help='Only used in Nirvana: interval for saving experiment state to $SNAPSHOT_PATH.')
     parser.add_argument('--compile', default=False, action='store_true',
                         help='Enables model compilation.')
 
@@ -416,14 +412,10 @@ def evaluate(model, dataset, val_timestamps_loader, test_timestamps_loader, loss
 
 def train(model, dataset, loss_fn, metric, logger: Logger, num_epochs, num_accumulation_steps, eval_every, lr,
           weight_decay, run_id, device, state_handler: StateHandler, amp=True, use_gradscaler=True, seed=None,
-          do_not_evaluate_on_test=False, nirvana=False):
+          do_not_evaluate_on_test=False):
 
     if seed is not None:
         torch.manual_seed(seed)
-    elif nirvana:
-        raise ValueError(
-            'You must specify seed when training in Nirvana to ensure the same behaviour after every rescheduling.'
-        )
 
     train_timestamps_loader = DataLoader(dataset.train_timestamps, batch_size=dataset.train_batch_size, shuffle=True,
                                          drop_last=True)
@@ -532,14 +524,10 @@ def main():
     CHECKPOINT_STATE_FILENAME = CHECKPOINT_DIR / 'state.pt'
 
     checkpoint_steps_interval = args.checkpoint_steps_interval
-    if args.nirvana:
-        state_handler: StateHandler = NirvanaStateHandler(checkpoint_file_path=CHECKPOINT_STATE_FILENAME,
-                                                          checkpoint_dir=CHECKPOINT_DIR,
-                                                          checkpoint_steps_interval=checkpoint_steps_interval)
-    else:
-        state_handler: StateHandler = DummyHandler(checkpoint_file_path=CHECKPOINT_STATE_FILENAME,
-                                                   checkpoint_dir=CHECKPOINT_DIR,
-                                                   checkpoint_steps_interval=checkpoint_steps_interval)
+    
+    state_handler: StateHandler = DummyHandler(checkpoint_file_path=CHECKPOINT_STATE_FILENAME,
+                                            checkpoint_dir=CHECKPOINT_DIR,
+                                            checkpoint_steps_interval=checkpoint_steps_interval)
     state_handler.load_checkpoint(initial_loading=True)
     whether_checkpoint_exists = CHECKPOINT_STATE_FILENAME.exists()
     logger = Logger(args=args, start_from_scratch=not whether_checkpoint_exists)
@@ -579,7 +567,6 @@ def main():
         eval_batch_size=args.eval_batch_size,
         eval_max_num_predictions_per_step=args.eval_max_num_predictions_per_step,
         device=args.device,
-        nirvana=args.nirvana,
         spatiotemporal_features_local_processed_memmap_name=args.spatiotemporal_preprocessed_features_filepath,
         disable_features_checkpointing=args.disable_features_checkpointing,
         use_edge_index=use_edge_index,
@@ -647,7 +634,7 @@ def main():
               num_epochs=args.num_epochs, num_accumulation_steps=args.num_accumulation_steps,
               eval_every=args.eval_every, lr=args.lr, weight_decay=args.weight_decay, run_id=run,
               device=args.device, amp=not args.no_amp, use_gradscaler=not args.no_gradscaler, seed=run,
-              do_not_evaluate_on_test=args.do_not_evaluate_on_test, nirvana=args.nirvana, state_handler=state_handler,
+              do_not_evaluate_on_test=args.do_not_evaluate_on_test, state_handler=state_handler,
               )
 
         state_handler.load_checkpoint()

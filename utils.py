@@ -4,7 +4,6 @@ import yaml
 from pathlib import Path
 import numpy as np
 import torch
-from nirvana_utils import copy_snapshot_to_out, copy_out_to_snapshot
 from time import perf_counter
 
 TorchStateDict = tp.Mapping[str, torch.FloatTensor]
@@ -18,7 +17,6 @@ class Logger:
         else:
             dataset_name = args.dataset
 
-        self.nirvana = args.nirvana
         self.metric = args.metric
         self.do_not_evaluate_on_test = args.do_not_evaluate_on_test
         self.val_metrics = []
@@ -27,7 +25,6 @@ class Logger:
         self.best_epochs = []
         self.num_runs = args.num_runs
         self.cur_run = None
-        self.in_nirvana = args.nirvana
 
 
         if start_from_scratch:
@@ -223,27 +220,6 @@ def _check_dim_and_num_heads_consistency(dim, num_heads):
         raise ValueError('Dimension mismatch: hidden_dim should be a multiple of num_heads.')
 
 
-class NirvanaNpzDataWrapper:
-    """Mimics default numpy npz dictionary, as Nirvana automatically unpacks it to separate arrays."""
-
-    def __init__(self, root_path: str):
-        self.root_path = root_path
-
-    def get_array_path(self, array_name: str):
-        return os.path.join(self.root_path, f'{array_name}.npy')
-
-    def __getitem__(self, array_name: str):
-        array_path = self.get_array_path(array_name)
-
-        print(f"Accessing `{array_name}` array at {array_path}")
-        array = np.load(array_path, allow_pickle=True)
-
-        return array
-
-    def __contains__(self, array_name: str):
-        return os.path.exists(self.get_array_path(array_name))
-
-
 class StateHandler:
     def __init__(self, checkpoint_file_path: Path, checkpoint_dir: Path, checkpoint_steps_interval: int) -> None:
         self.checkpoint_file_path = checkpoint_file_path
@@ -318,95 +294,6 @@ class StateHandler:
 
     def save_checkpoint(self, finish_run: bool = False) -> None:
         pass
-
-
-# TODO check that the model is the same after being passed here
-# TODO checkpoint handling
-class NirvanaStateHandler(StateHandler):
-
-    def __init__(self, checkpoint_file_path: Path, checkpoint_dir: Path, checkpoint_steps_interval: int) -> None:
-        # initialize training attributes
-        super().__init__(checkpoint_file_path=checkpoint_file_path, checkpoint_dir=checkpoint_dir, checkpoint_steps_interval=checkpoint_steps_interval)
-
-    @property
-    def current_run_model_state_dict(self) -> TorchStateDict:
-        return self.model.state_dict()
-
-    @property
-    def current_run_optimizer_state_dict(self) -> TorchStateDict:
-        return self.optimizer.state_dict()
-
-    @property
-    def current_run_scaler_state(self) -> TorchStateDict:
-        return self.grad_scaler.state_dict()
-
-    @property
-    def logger_state(self) -> dict[str, tp.Any]:
-        return self.logger.get_parameters_for_checkpoint()
-
-    def load_checkpoint(self, initial_loading: bool = False):
-        if initial_loading:
-            copy_snapshot_to_out(self.checkpoint_dir)
-
-        if self.checkpoint_file_path.exists():
-            # if path exists, thus logger state always nonempty
-            state_dict: dict[str, TorchStateDict | dict[str, tp.Any] | int | float | torch.Tensor] = torch.load(self.checkpoint_file_path, weights_only=True)
-            self._logger_state = state_dict["logger_state"]
-            self._model_state = state_dict["model_state"]
-            self._optimizer_state = state_dict["optimizer_state"]
-            self._grad_scaler_state = state_dict["scaler_state"]
-
-            self.steps_after_run_start = state_dict["steps_after_run_start"]
-            self.epochs_finished = state_dict["epochs_finished"]
-            self.optimizer_steps_done = state_dict["optimizer_steps_done"]
-            self.loss = state_dict["loss"]
-            self.num_runs_completed = state_dict["runs_completed"]
-
-    def save_checkpoint(self, finish_run: bool = False) -> None:
-        print(f"Saving checkpoint to {self.checkpoint_file_path}")
-        if finish_run:
-            # if run is finished, there is no need to save model's weights and optimizer
-            overall_state_dict = dict(
-                steps_after_run_start=0,
-                epochs_finished=0,
-                optimizer_steps_done=0,
-                loss=0.0,
-                logger_state=self.logger_state,
-                model_state=self.current_run_model_state_dict,
-                optimizer_state=None,
-                scaler_state=None,
-                runs_completed=self.num_runs_completed,
-            )
-        else:
-            overall_state_dict = dict(
-                steps_after_run_start=self.steps_after_run_start,
-                epochs_finished=self.epochs_finished,
-                optimizer_steps_done=self.optimizer_steps_done,
-                loss=self.loss,
-                logger_state=self.logger_state,
-                model_state=self.current_run_model_state_dict,
-                optimizer_state=self.current_run_optimizer_state_dict,
-                scaler_state=self.current_run_scaler_state,
-                runs_completed=self.num_runs_completed,
-            )
-
-
-        torch.save(overall_state_dict, f=self.checkpoint_file_path)
-        copy_out_to_snapshot(self.checkpoint_dir, dump=True)
-
-    def step(self) -> None:
-        self.steps_after_run_start += 1
-        if self.steps_after_run_start % self.checkpoint_steps_interval == 0:
-            self.save_checkpoint()
-
-    def finish_epoch(self) -> None:
-        self.epochs_finished += 1
-        self.save_checkpoint()
-
-    def finish_run(self) -> None:
-        self.num_runs_completed += 1
-        self.save_checkpoint(finish_run=True)
-        super().finish_run(predictions_targets_dict)
 
 
 class DummyHandler(StateHandler):
