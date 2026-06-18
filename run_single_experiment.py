@@ -109,6 +109,9 @@ def get_args(add_name: bool = True):
                              'week-in-year (if there are at least 2 train years), '
                              'month-in-year (if there are at least 2 train years).')
 
+    #add checkpoint_steps_interval
+    parser.add_argument('--checkpoint_steps_interval', type=int, default=1000)
+
     # Add additional node features.
     parser.add_argument('--use_deepwalk_node_embeddings', default=False, action='store_true')
     parser.add_argument('--use_learnable_node_embeddings', default=False, action='store_true',
