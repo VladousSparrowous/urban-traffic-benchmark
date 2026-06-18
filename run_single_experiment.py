@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from dataset import Dataset
 from models import ModelRegistry
-from utils import Logger, get_parameter_groups, DummyHandler, StateHandler
+from utils import Logger, get_parameter_groups, DummyHandler, StateHandler, LocalLogger, LocalStateHandler
 
 torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -520,19 +520,28 @@ def main():
     Model = ModelRegistry.get_model_class(args.model_class)
 
     # moved checkpoint logic to the front as it will be needed for dataset preprocessing
-    CHECKPOINT_DIR = Path(args.save_dir)
-    CHECKPOINT_STATE_FILENAME = CHECKPOINT_DIR / 'state.pt'
-
-    checkpoint_steps_interval = args.checkpoint_steps_interval
+    checkpoint_dir = Path(args.save_dir) / 'checkpoints'
+    state_handler = LocalStateHandler(
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_steps_interval=args.checkpoint_steps_interval
+    )
     
-    state_handler: StateHandler = DummyHandler(checkpoint_file_path=CHECKPOINT_STATE_FILENAME,
-                                            checkpoint_dir=CHECKPOINT_DIR,
-                                            checkpoint_steps_interval=checkpoint_steps_interval)
-    state_handler.load_checkpoint(initial_loading=True)
-    whether_checkpoint_exists = CHECKPOINT_STATE_FILENAME.exists()
-    logger = Logger(args=args, start_from_scratch=not whether_checkpoint_exists)
-    state_handler.add_logger(logger=logger)
+    # Загружаем чекпоинт если есть
 
+    checkpoint_exists = state_handler.load_checkpoint()
+    logger = LocalLogger(
+        save_dir=args.save_dir,
+        metric=args.metric,
+        do_not_evaluate_on_test=args.do_not_evaluate_on_test
+    )
+
+    if checkpoint_exists:
+            # Восстанавливаем состояние логгера из чекпоинта
+            if hasattr(state_handler, 'logger_state'):
+                logger.set_state(state_handler.logger_state)
+        
+    state_handler.add_logger(logger)
+    
     use_edge_index = args.model_class == 'BaselineModel'
 
     dataset = Dataset(
