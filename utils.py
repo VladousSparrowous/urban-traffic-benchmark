@@ -9,12 +9,6 @@ import pickle
 from typing import Any, Dict, Optional
 TorchStateDict = tp.Mapping[str, torch.FloatTensor]
 
-
-import os
-import yaml
-from pathlib import Path
-import numpy as np
-
 class LocalLogger:
     """Простой локальный логгер без зависимостей от Nirvana."""
     
@@ -33,13 +27,36 @@ class LocalLogger:
         self.elapsed_time = 0
         self.max_memory_allocated = 0
         
+        # Для сохранения предсказаний
+        self.val_predictions = None
+        self.val_targets = None
+        self.test_predictions = None
+        self.test_targets = None
+        
+    def _to_python_type(self, value):
+        """Рекурсивно преобразует numpy/torch типы в Python типы."""
+        if isinstance(value, (np.ndarray, torch.Tensor)):
+            return value.tolist()
+        elif isinstance(value, (np.float32, np.float64)):
+            return float(value)
+        elif isinstance(value, (np.int32, np.int64)):
+            return int(value)
+        elif isinstance(value, dict):
+            return {k: self._to_python_type(v) for k, v in value.items()}
+        elif isinstance(value, (list, tuple)):
+            return [self._to_python_type(v) for v in value]
+        elif isinstance(value, (np.bool_)):
+            return bool(value)
+        else:
+            return value
+    
     def get_state(self):
         """Возвращает состояние для сохранения в чекпоинт."""
         return {
-            'val_metrics': self.val_metrics,
-            'test_metrics': self.test_metrics,
-            'best_steps': self.best_steps,
-            'best_epochs': self.best_epochs,
+            'val_metrics': self._to_python_type(self.val_metrics),
+            'test_metrics': self._to_python_type(self.test_metrics),
+            'best_steps': self._to_python_type(self.best_steps),
+            'best_epochs': self._to_python_type(self.best_epochs),
             'num_runs': self.num_runs,
             'current_run': self.current_run,
             'elapsed_time': self.elapsed_time,
@@ -69,11 +86,24 @@ class LocalLogger:
     def update_metrics(self, metrics, step, epoch):
         current_val = metrics[f'val {self.metric}']
         if self.val_metrics[-1] is None or current_val < self.val_metrics[-1]:
-            self.val_metrics[-1] = current_val
+            self.val_metrics[-1] = float(current_val)  # Приводим к float
             if not self.do_not_evaluate_on_test:
-                self.test_metrics[-1] = metrics[f'test {self.metric}']
-            self.best_steps[-1] = step
-            self.best_epochs[-1] = epoch
+                self.test_metrics[-1] = float(metrics[f'test {self.metric}'])
+            self.best_steps[-1] = int(step)
+            self.best_epochs[-1] = int(epoch)
+    
+    def save_predictions(self, predictions, targets, split='val'):
+        """Сохраняет предсказания."""
+        if split == 'val':
+            self.val_predictions = predictions
+            self.val_targets = targets
+            torch.save(predictions, self.save_dir / 'val_predictions.pt')
+            torch.save(targets, self.save_dir / 'val_targets.pt')
+        else:
+            self.test_predictions = predictions
+            self.test_targets = targets
+            torch.save(predictions, self.save_dir / 'test_predictions.pt')
+            torch.save(targets, self.save_dir / 'test_targets.pt')
             
     def finish_run(self):
         self.save_metrics()
@@ -82,40 +112,68 @@ class LocalLogger:
         
     def save_metrics(self):
         metrics_file = self.save_dir / 'metrics.yaml'
+        
+        # Приводим все значения к Python типам
+        val_metrics = self._to_python_type(self.val_metrics)
+        val_metrics_filtered = [m for m in val_metrics if m is not None]
+        
         metrics = {
-            'num_runs': len(self.val_metrics),
-            f'val_{self.metric}_mean': np.mean(self.val_metrics),
-            f'val_{self.metric}_std': np.std(self.val_metrics, ddof=1) if len(self.val_metrics) > 1 else np.nan,
-            f'val_{self.metric}_values': self.val_metrics,
-            'best_steps': self.best_steps,
-            'best_epochs': self.best_epochs,
+            'num_runs': len(val_metrics_filtered),
+            f'val_{self.metric}_mean': float(np.mean(val_metrics_filtered)) if val_metrics_filtered else None,
+            f'val_{self.metric}_std': float(np.std(val_metrics_filtered, ddof=1)) if len(val_metrics_filtered) > 1 else None,
+            f'val_{self.metric}_values': val_metrics_filtered,
+            'best_steps': self._to_python_type(self.best_steps),
+            'best_epochs': self._to_python_type(self.best_epochs),
         }
         
         if not self.do_not_evaluate_on_test and self.test_metrics is not None:
-            metrics[f'test_{self.metric}_mean'] = np.mean(self.test_metrics)
-            metrics[f'test_{self.metric}_std'] = np.std(self.test_metrics, ddof=1) if len(self.test_metrics) > 1 else np.nan
-            metrics[f'test_{self.metric}_values'] = self.test_metrics
-            metrics['best_test_metric'] = np.min(self.test_metrics)
+            test_metrics = self._to_python_type(self.test_metrics)
+            test_metrics_filtered = [m for m in test_metrics if m is not None]
+            
+            if test_metrics_filtered:
+                metrics[f'test_{self.metric}_mean'] = float(np.mean(test_metrics_filtered))
+                metrics[f'test_{self.metric}_std'] = float(np.std(test_metrics_filtered, ddof=1)) if len(test_metrics_filtered) > 1 else None
+                metrics[f'test_{self.metric}_values'] = test_metrics_filtered
+                metrics['best_test_metric'] = float(np.min(test_metrics_filtered))
         
-        metrics['best_val_metric'] = np.min(self.val_metrics)
-        metrics['elapsed_time'] = self.elapsed_time
-        metrics['max_memory_allocated_mb'] = self.max_memory_allocated // (2 ** 20)
+        if val_metrics_filtered:
+            metrics['best_val_metric'] = float(np.min(val_metrics_filtered))
         
+        metrics['elapsed_time'] = float(self.elapsed_time)
+        metrics['max_memory_allocated_mb'] = int(self.max_memory_allocated // (2 ** 20))
+        
+        # Сохраняем YAML
         with open(metrics_file, 'w') as f:
-            yaml.safe_dump(metrics, f, sort_keys=False)
+            yaml.safe_dump(metrics, f, sort_keys=False, default_flow_style=False)
+            
+        print(f"Metrics saved to {metrics_file}")
             
     def print_metrics_summary(self):
-        with open(self.save_dir / 'metrics.yaml', 'r') as f:
+        metrics_file = self.save_dir / 'metrics.yaml'
+        if not metrics_file.exists():
+            print("No metrics file found.")
+            return
+            
+        with open(metrics_file, 'r') as f:
             metrics = yaml.safe_load(f)
         
+        print("\n" + "="*50)
+        print("TRAINING COMPLETE - METRICS SUMMARY")
+        print("="*50)
         print(f"Finished {metrics['num_runs']} runs.")
-        print(f"Val {self.metric} mean: {metrics[f'val_{self.metric}_mean']:.4f}")
-        print(f"Val {self.metric} std: {metrics[f'val_{self.metric}_std']:.4f}")
+        print(f"Val {self.metric} mean: {metrics.get(f'val_{self.metric}_mean', 'N/A'):.4f}")
+        print(f"Val {self.metric} std: {metrics.get(f'val_{self.metric}_std', 'N/A'):.4f}")
         
         if not self.do_not_evaluate_on_test and f'test_{self.metric}_mean' in metrics:
             print(f"Test {self.metric} mean: {metrics[f'test_{self.metric}_mean']:.4f}")
-            print(f"Test {self.metric} std: {metrics[f'test_{self.metric}_std']:.4f}")
-
+            print(f"Test {self.metric} std: {metrics.get(f'test_{self.metric}_std', 'N/A'):.4f}")
+        
+        print(f"Best val {self.metric}: {metrics.get('best_val_metric', 'N/A'):.4f}")
+        if 'best_test_metric' in metrics:
+            print(f"Best test {self.metric}: {metrics['best_test_metric']:.4f}")
+        print(f"Elapsed time: {metrics.get('elapsed_time', 0):.2f} seconds")
+        print(f"Max memory allocated: {metrics.get('max_memory_allocated_mb', 0)} MB")
+        print("="*50)
 
 class Logger:
     
