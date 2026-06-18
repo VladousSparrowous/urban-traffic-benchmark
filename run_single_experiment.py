@@ -410,8 +410,8 @@ def evaluate(model, dataset, val_timestamps_loader, test_timestamps_loader, loss
     return metrics
 
 
-def train(model, dataset, loss_fn, metric, logger: Logger, num_epochs, num_accumulation_steps, eval_every, lr,
-          weight_decay, run_id, device, state_handler: StateHandler, amp=True, use_gradscaler=True, seed=None,
+def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_steps, eval_every, lr,
+          weight_decay, run_id, device, state_handler, amp=True, use_gradscaler=True, seed=None,
           do_not_evaluate_on_test=False):
 
     if seed is not None:
@@ -588,7 +588,7 @@ def main():
     else:
         raise ValueError(f'Unsupported metric: {args.metric}.')
 
-    for run in range(state_handler.num_runs_completed + 1, args.num_runs + 1):
+    for run in range(logger.num_runs + 1, args.num_runs + 1):
         model = Model(
             baseline_name=args.baseline_name,
             neighborhood_aggregation_name=args.neighborhood_aggregation,
