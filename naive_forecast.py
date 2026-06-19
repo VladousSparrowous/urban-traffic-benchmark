@@ -80,7 +80,7 @@ def main():
     args = get_args()
 
     dataset = Dataset(name_or_path=args.dataset,
-                      state_handler=DummyHandler(Path('dummy_path'), Path('.')),
+                      state_handler=DummyHandler(Path('dummy_path'), 1),
                       prediction_horizon=args.prediction_horizon,
                       only_predict_at_end_of_horizon=args.only_predict_at_end_of_horizon,
                       drop_early_train_timestamps='none',

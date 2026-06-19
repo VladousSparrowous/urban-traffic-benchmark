@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from dataset import Dataset
 from models import ModelRegistry
-from utils import Logger, get_parameter_groups, DummyHandler, StateHandler, LocalLogger, LocalStateHandler
+from utils import get_parameter_groups, DummyHandler, LocalLogger, LocalStateHandler
 
 torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_tf32 = True

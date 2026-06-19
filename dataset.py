@@ -14,7 +14,7 @@ from sklearn.impute import SimpleImputer
 
 from data_transforms import IdentityTransform, StandardScaler, MinMaxScaler, RobustScaler, QuantileTransform
 from time_based_features import create_time_based_features
-from utils import StateHandler, get_tensor_or_wrap_memmap, read_memmap
+from utils import get_tensor_or_wrap_memmap, read_memmap
 
 
 class Dataset:
@@ -27,7 +27,7 @@ class Dataset:
         'quantile-transform-uniform': partial(QuantileTransform, distribution='uniform')
     }
 
-    def __init__(self, name_or_path, state_handler: StateHandler, prediction_horizon=12, only_predict_at_end_of_horizon=False,
+    def __init__(self, name_or_path, state_handler, prediction_horizon=12, only_predict_at_end_of_horizon=False,
                  provide_sequnce_inputs=False, direct_lookback_num_steps=48,
                  seasonal_lookback_periods=None, seasonal_lookback_num_steps=None,
                  drop_early_train_timestamps='direct',
