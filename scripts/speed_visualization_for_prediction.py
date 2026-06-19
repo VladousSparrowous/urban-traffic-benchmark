@@ -2,6 +2,8 @@
 Визуализация предсказаний модели скорости на карте OSM.
 Сравнение предсказанных значений с реальными для валидационных данных.
 
+
+
 python visualize_predictions.py \
     --dataset /path/to/dataset.npz \
     --predictions /path/to/val_predictions.pt \
@@ -29,17 +31,6 @@ from matplotlib.colors import Normalize
 from matplotlib import colormaps
 import branca.colormap as branca_cm
 
-
-@dataclass
-class PredictionData:
-    """Данные для визуализации предсказаний."""
-    node_id: int
-    timestamp_idx: int
-    lat: float
-    lon: float
-    true_speed: float
-    pred_speed: float
-    error: float
 
 
 class TrafficPredictionVisualizer:
@@ -85,7 +76,13 @@ class TrafficPredictionVisualizer:
         with np.load(self.dataset_path, allow_pickle=True) as data:
             self.spatial_features = data['spatial_node_features'].astype(np.float32)
             self.edge_index = data['edges']
-            self.num_nodes = data['num_nodes'].item()
+            
+            # Получаем количество узлов из формы spatial_features
+            # spatial_features может иметь форму (1, num_nodes, num_features) или (num_nodes, num_features)
+            if self.spatial_features.ndim == 3:
+                self.num_nodes = self.spatial_features.shape[1]
+            else:
+                self.num_nodes = self.spatial_features.shape[0]
             
             # Определяем индексы координат
             self._detect_coordinate_indices(data)
@@ -124,10 +121,10 @@ class TrafficPredictionVisualizer:
             else:
                 # Пробуем альтернативные имена
                 alt_names = {
-                    'x_coordinate_start': ['x_coordinate', 'lon', 'longitude'],
-                    'y_coordinate_start': ['y_coordinate', 'lat', 'latitude'],
-                    'x_coordinate_end': ['x_coordinate_end', 'lon_end'],
-                    'y_coordinate_end': ['y_coordinate_end', 'lat_end']
+                    'x_coordinate_start': ['x_coordinate', 'lon', 'longitude', 'x'],
+                    'y_coordinate_start': ['y_coordinate', 'lat', 'latitude', 'y'],
+                    'x_coordinate_end': ['x_coordinate_end', 'lon_end', 'x_end'],
+                    'y_coordinate_end': ['y_coordinate_end', 'lat_end', 'y_end']
                 }
                 found = False
                 for alt in alt_names.get(name, []):
@@ -136,7 +133,17 @@ class TrafficPredictionVisualizer:
                         found = True
                         break
                 if not found:
-                    raise ValueError(f"Coordinate feature '{name}' not found. Available: {feature_names}")
+                    # Если координаты не найдены, пробуем использовать первые два признака как координаты
+                    if name == 'x_coordinate_start':
+                        self.coord_indices[name] = 0
+                    elif name == 'y_coordinate_start':
+                        self.coord_indices[name] = 1
+                    elif name == 'x_coordinate_end':
+                        self.coord_indices[name] = 0
+                    elif name == 'y_coordinate_end':
+                        self.coord_indices[name] = 1
+                    else:
+                        raise ValueError(f"Coordinate feature '{name}' not found. Available: {feature_names}")
         
     def _get_node_coordinates(self) -> np.ndarray:
         """Извлекает координаты узлов из пространственных признаков."""
@@ -269,7 +276,11 @@ class TrafficPredictionVisualizer:
         
         # Добавляем дорожные сегменты (связи между узлами)
         if self.edge_index is not None and len(self.edge_index) > 0:
-            for i, (u, v) in enumerate(self.edge_index):
+            # Ограничиваем количество отображаемых ребер для производительности
+            max_edges = 5000
+            edges_to_plot = self.edge_index[:max_edges] if len(self.edge_index) > max_edges else self.edge_index
+            
+            for i, (u, v) in enumerate(edges_to_plot):
                 u, v = int(u), int(v)
                 if u < self.num_nodes and v < self.num_nodes:
                     start = self.node_coords[u]
@@ -388,7 +399,10 @@ class TrafficPredictionVisualizer:
         # Подготавливаем данные для каждого временного шага
         all_data = []
         
-        for t in range(self.targets.shape[0]):
+        # Ограничиваем количество временных шагов для анимации
+        max_timestamps = min(self.targets.shape[0], 200)
+        
+        for t in range(max_timestamps):
             preds, targets, mask = self.prepare_data_for_timestamp(t)
             
             # Создаем список данных для каждого узла
@@ -516,12 +530,11 @@ class TrafficPredictionVisualizer:
                 <input type="range" id="timeline" min="0" max="0" value="0" step="1">
             </div>
             
-            <script src="animation_data/animation_data.json"></script>
             <script>
                 // Загрузка данных
                 let animationData = [];
                 
-                fetch('animation_data/animation_data.json')
+                fetch('animation_data.json')
                     .then(response => response.json())
                     .then(data => {
                         animationData = data;
@@ -659,7 +672,10 @@ class TrafficPredictionVisualizer:
         all_targets = []
         all_errors = []
         
-        for t in range(self.targets.shape[0]):
+        # Ограничиваем количество временных шагов для анализа
+        max_timestamps = min(self.targets.shape[0], 200)
+        
+        for t in range(max_timestamps):
             preds, targets, mask = self.prepare_data_for_timestamp(t)
             all_preds.extend(preds[mask])
             all_targets.extend(targets[mask])
@@ -695,7 +711,7 @@ class TrafficPredictionVisualizer:
         
         # 4. Ошибка по временным шагам
         errors_by_time = []
-        for t in range(self.targets.shape[0]):
+        for t in range(max_timestamps):
             preds, targets, mask = self.prepare_data_for_timestamp(t)
             errors_by_time.append(np.mean(np.abs(preds[mask] - targets[mask])))
         
@@ -713,101 +729,3 @@ class TrafficPredictionVisualizer:
             print(f"Saved analysis plot to {plot_path}")
         
         plt.show()
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize traffic speed predictions on OSM map"
-    )
-    parser.add_argument(
-        "--dataset", 
-        type=Path, 
-        required=True,
-        help="Path to dataset NPZ file"
-    )
-    parser.add_argument(
-        "--predictions",
-        type=Path,
-        required=True,
-        help="Path to predictions PT file"
-    )
-    parser.add_argument(
-        "--targets",
-        type=Path,
-        required=True,
-        help="Path to targets PT file"
-    )
-    parser.add_argument(
-        "--nan-mask",
-        type=Path,
-        default=None,
-        help="Path to NaN mask PT file (optional)"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default="./visualization_output",
-        help="Output directory for visualizations"
-    )
-    parser.add_argument(
-        "--timestamp",
-        type=int,
-        default=None,
-        help="Specific timestamp index to visualize (default: middle timestamp)"
-    )
-    parser.add_argument(
-        "--num-timestamps",
-        type=int,
-        default=4,
-        help="Number of timestamps for grid visualization"
-    )
-    parser.add_argument(
-        "--create-animation",
-        action="store_true",
-        help="Create animation data for all timestamps"
-    )
-    parser.add_argument(
-        "--create-plots",
-        action="store_true",
-        help="Create statistical analysis plots"
-    )
-    
-    args = parser.parse_args()
-    
-    # Создаем визуализатор
-    visualizer = TrafficPredictionVisualizer(
-        dataset_npz_path=args.dataset,
-        predictions_path=args.predictions,
-        targets_path=args.targets,
-        output_dir=args.output_dir,
-        nan_mask_path=args.nan_mask
-    )
-    
-    # Визуализируем
-    if args.timestamp is not None:
-        visualizer.visualize_predictions_at_timestamp(
-            timestamp_idx=args.timestamp,
-            save_html=True,
-            show_errors=True
-        )
-    else:
-        # Создаем сетку карт для нескольких временных меток
-        visualizer.visualize_comparison_grid(
-            num_timestamps=args.num_timestamps,
-            save_html=True
-        )
-    
-    # Создаем анимацию (если запрошено)
-    if args.create_animation:
-        visualizer.create_animation_data()
-    
-    # Создаем статистические графики (если запрошено)
-    if args.create_plots:
-        visualizer.create_histogram_comparison()
-    
-    print(f"\nAll visualizations saved to: {args.output_dir}")
-    print("Open the HTML files in your browser to view the maps.")
-
-
-if __name__ == "__main__":
-    main()
