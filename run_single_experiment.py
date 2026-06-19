@@ -545,7 +545,7 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
                 if is_best:
                     best_val_metric = current_val_metric
                     # Переоцениваем с флагом is_best=True для сохранения
-                    logger.info(f"🎯 New best {metric}: {best_val_metric:.4f}")
+                    print(f"new best {metric}: {best_val_metric:.4f}")
                     evaluate(
                         model=model, 
                         dataset=dataset, 
