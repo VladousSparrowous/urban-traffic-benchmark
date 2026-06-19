@@ -3,17 +3,20 @@
 Сравнение предсказанных значений с реальными для валидационных данных.
 
 
-
-python visualize_predictions.py \
+python simple_osm_visualizer.py \
     --dataset /path/to/dataset.npz \
-    --predictions /path/to/val_predictions.pt \
-    --targets /path/to/val_targets.pt \
-    --output-dir ./visualization_output \
+    --predictions /path/to/predictions.pt \
+    --targets /path/to/targets.pt \
+    --output-dir ./my_maps\
+    --difference --timestamp 0\
+    or
+    --all\
+    or
+    --num-timestamps 10\
+    or
+    --timestamp 0
+    
 
-
-"""
-"""
-Простая визуализация предсказаний скорости на карте OSM.
 """
 
 import argparse
@@ -86,7 +89,7 @@ class SimpleTrafficVisualizer:
         # Получаем координаты
         self.node_coords = self._get_node_coordinates()
         
-        print(f"✅ Data loaded: {self.num_nodes} nodes, {self.targets.shape[0]} timestamps")
+        print(f"Data loaded: {self.num_nodes} nodes, {self.targets.shape[0]} timestamps")
         
     def _detect_coordinate_indices(self, feature_names):
         """Определяет индексы координат."""
@@ -145,7 +148,7 @@ class SimpleTrafficVisualizer:
         print(f"Timestamp {timestamp_idx}: {valid_count} valid nodes")
         
         if valid_count == 0:
-            print("❌ No valid data found!")
+            print("No valid data found!")
             return folium.Map(location=[0, 0], zoom_start=2)
         
         # Ошибки
@@ -189,7 +192,7 @@ class SimpleTrafficVisualizer:
         
         # Добавляем дороги (первые 1000 ребер для производительности)
         if self.edge_index is not None and len(self.edge_index) > 0:
-            max_edges = min(1000, len(self.edge_index))
+            max_edges = min(2000, len(self.edge_index))
             for i in range(max_edges):
                 u, v = int(self.edge_index[i][0]), int(self.edge_index[i][1])
                 if u < self.num_nodes and v < self.num_nodes:
@@ -295,7 +298,7 @@ class SimpleTrafficVisualizer:
         if save_html:
             html_filename = self.output_dir / f'traffic_map_timestamp_{timestamp_idx}.html'
             m.save(str(html_filename))
-            print(f"✅ Map saved to {html_filename}")
+            print(f"Map saved to {html_filename}")
         
         return m
     
@@ -327,7 +330,7 @@ class SimpleTrafficVisualizer:
         mask = ~np.isnan(targets)
         
         if np.sum(mask) == 0:
-            print("❌ No valid data!")
+            print("No valid data!")
             return folium.Map(location=[0, 0], zoom_start=2)
         
         differences = preds - targets
@@ -390,7 +393,7 @@ class SimpleTrafficVisualizer:
         if save_html:
             html_filename = self.output_dir / f'difference_map_timestamp_{timestamp_idx}.html'
             m.save(str(html_filename))
-            print(f"✅ Difference map saved to {html_filename}")
+            print(f"Difference map saved to {html_filename}")
         
         return m
 
@@ -477,7 +480,7 @@ def main():
         visualizer.visualize_timestamp(timestamp_idx=args.timestamp)
     
     print("\n" + "="*50)
-    print(f"✅ All maps saved to: {args.output_dir}")
+    print(f"All maps saved to: {args.output_dir}")
     print("="*50)
 
 
