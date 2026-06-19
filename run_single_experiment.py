@@ -331,8 +331,6 @@ def compute_metric(preds, targets, targets_nan_mask, dataset, loss_fn, metric, a
             loss_sum += cur_loss_sum
             loss_count += cur_loss_count
 
-
-
         loss_mean = loss_sum / loss_count
 
     metric = loss_mean.sqrt().item() if metric == 'RMSE' else loss_mean.item()
@@ -341,16 +339,17 @@ def compute_metric(preds, targets, targets_nan_mask, dataset, loss_fn, metric, a
 
 
 @torch.no_grad()
-def evaluate_on_val_or_test(model, dataset, split, timestamps_loader, loss_fn, metric, amp=True):
-
-
+def evaluate_on_val_or_test(model, dataset, split, timestamps_loader, loss_fn, metric, amp=True, logger=None, is_best=False):
+    """
+    Оценка на валидации или тесте с сохранением предсказаний через логгер.
+    Сохраняет только если is_best=True.
+    """
     global VAL_PREDICTIONS
     global TEST_PREDICTIONS
     global VAL_TARGETS
     global TEST_TARGETS
     global VAL_TARGETS_NAN_MASK
     global TEST_TARGETS_NAN_MASK
-
 
     preds = []
     for timestamps_batch in timestamps_loader:
@@ -380,16 +379,31 @@ def evaluate_on_val_or_test(model, dataset, split, timestamps_loader, loss_fn, m
     else:
         raise ValueError(f'Unknown split: {split}. Split argument should be either val or test.')
 
-    metric, preds_transformed, targets_transformed = compute_metric(preds=preds, targets=targets, targets_nan_mask=targets_nan_mask, dataset=dataset,
-                            loss_fn=loss_fn, metric=metric, apply_transform_to_preds=True)
+    # Преобразуем предсказания обратно в исходный масштаб
+    preds_transformed = dataset.transform_preds_for_metrics(preds.to(dataset.device))
+    
+    # Сохраняем предсказания через логгер ТОЛЬКО если это лучшие
+    if logger is not None and is_best:
+        logger.save_predictions(preds_transformed.cpu(), targets, split=split)
+        print(f"Saved BEST {split} predictions via logger to {logger.save_dir}")
+
+    metric, _, _ = compute_metric(
+        preds=preds, 
+        targets=targets, 
+        targets_nan_mask=targets_nan_mask, 
+        dataset=dataset,
+        loss_fn=loss_fn, 
+        metric=metric, 
+        apply_transform_to_preds=True
+    )
 
     if split == 'val':
         VAL_PREDICTIONS = preds_transformed
-        VAL_TARGETS = targets_transformed
+        VAL_TARGETS = targets
         VAL_TARGETS_NAN_MASK = targets_nan_mask
     else:
         TEST_PREDICTIONS = preds_transformed
-        TEST_TARGETS = targets_transformed
+        TEST_TARGETS = targets
         TEST_TARGETS_NAN_MASK = targets_nan_mask
 
     return metric
@@ -397,17 +411,37 @@ def evaluate_on_val_or_test(model, dataset, split, timestamps_loader, loss_fn, m
 
 @torch.no_grad()
 def evaluate(model, dataset, val_timestamps_loader, test_timestamps_loader, loss_fn, metric, amp=True,
-             do_not_evaluate_on_test=False):
+             do_not_evaluate_on_test=False, logger=None, is_best=False):
+    """
+    Оценка модели с сохранением лучших предсказаний через логгер.
+    """
     metrics = {}
-    val_metric = evaluate_on_val_or_test(model=model, dataset=dataset, split='val',
-                                         timestamps_loader=val_timestamps_loader, loss_fn=loss_fn,
-                                         metric=metric, amp=amp)
+    
+    val_metric = evaluate_on_val_or_test(
+        model=model, 
+        dataset=dataset, 
+        split='val',
+        timestamps_loader=val_timestamps_loader, 
+        loss_fn=loss_fn,
+        metric=metric, 
+        amp=amp,
+        logger=logger,
+        is_best=is_best  # Передаем флаг
+    )
     metrics[f'val {metric}'] = val_metric
 
     if not do_not_evaluate_on_test:
-        test_metric = evaluate_on_val_or_test(model=model, dataset=dataset, split='test',
-                                              timestamps_loader=test_timestamps_loader, loss_fn=loss_fn,
-                                              metric=metric, amp=amp)
+        test_metric = evaluate_on_val_or_test(
+            model=model, 
+            dataset=dataset, 
+            split='test',
+            timestamps_loader=test_timestamps_loader, 
+            loss_fn=loss_fn,
+            metric=metric, 
+            amp=amp,
+            logger=logger,
+            is_best=is_best  # Передаем флаг
+        )
         metrics[f'test {metric}'] = test_metric
 
     return metrics
@@ -447,6 +481,10 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
     train_timestamps_loader_iterator = iter(train_timestamps_loader)
     model.train()
     starting_step_idx = state_handler.steps_after_run_start
+    
+    # Для отслеживания лучшей метрики
+    best_val_metric = float('inf')
+    
     with tqdm(total=num_steps, desc=f'Run {run_id}') as progress_bar:
         progress_bar.n = starting_step_idx
         if starting_step_idx > 0:
@@ -464,7 +502,6 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
 
             steps_till_optimizer_step -= 1
 
-            # we backward for each minibatch to free computation graph
             gradscaler.scale(state_handler.loss / num_accumulation_steps).backward()
 
             progress_bar.update()
@@ -472,7 +509,6 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
                 {metric: f'{value:.2f}' for metric, value in metrics.items()} |
                 {'cur step loss': f'{state_handler.loss.item():.2f}', 'epoch': epoch}
             )
-
 
             if steps_till_optimizer_step == 0:
                 optimizer_step(optimizer=optimizer, gradscaler=gradscaler)
@@ -488,12 +524,46 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
             ):
                 progress_bar.set_postfix_str('     Evaluating...     ' + progress_bar.postfix)
                 model.eval()
-                metrics = evaluate(model=model, dataset=dataset, val_timestamps_loader=val_timestamps_loader,
-                                test_timestamps_loader=test_timestamps_loader, loss_fn=loss_fn, metric=metric,
-                                amp=amp, do_not_evaluate_on_test=do_not_evaluate_on_test)
+                
+                # Вычисляем текущую метрику
+                metrics = evaluate(
+                    model=model, 
+                    dataset=dataset, 
+                    val_timestamps_loader=val_timestamps_loader,
+                    test_timestamps_loader=test_timestamps_loader, 
+                    loss_fn=loss_fn, 
+                    metric=metric,
+                    amp=amp, 
+                    do_not_evaluate_on_test=do_not_evaluate_on_test,
+                    logger=logger,
+                    is_best=False  # Пока не знаем, лучшая ли это метрика
+                )
+                
+                current_val_metric = metrics[f'val {metric}']
+                is_best = current_val_metric < best_val_metric
+                
+                if is_best:
+                    best_val_metric = current_val_metric
+                    # Переоцениваем с флагом is_best=True для сохранения
+                    logger.info(f"🎯 New best {metric}: {best_val_metric:.4f}")
+                    evaluate(
+                        model=model, 
+                        dataset=dataset, 
+                        val_timestamps_loader=val_timestamps_loader,
+                        test_timestamps_loader=test_timestamps_loader, 
+                        loss_fn=loss_fn, 
+                        metric=metric,
+                        amp=amp, 
+                        do_not_evaluate_on_test=do_not_evaluate_on_test,
+                        logger=logger,
+                        is_best=True  # Сохраняем предсказания
+                    )
+                
+                # Обновляем логгер с метриками
                 logger.update_metrics(metrics=metrics, step=state_handler.optimizer_steps_done, epoch=epoch)
                 model.train()
-                if step != num_steps and train_timestamps_loader_iterator._num_yielded != len(train_timestamps_loader): # prevent state handler to save 3 checkpoints at the same time on the last step
+                
+                if step != num_steps and train_timestamps_loader_iterator._num_yielded != len(train_timestamps_loader):
                     state_handler.save_checkpoint()
 
                 if optimizer_steps_till_eval == 0:
@@ -504,16 +574,12 @@ def train(model, dataset, loss_fn, metric, logger, num_epochs, num_accumulation_
             if train_timestamps_loader_iterator._num_yielded == len(train_timestamps_loader):
                 train_timestamps_loader_iterator = iter(train_timestamps_loader)
                 epoch += 1
-                if epoch < num_epochs: # prevent state handler to save 3 checkpoints at the same time on the last step
+                if epoch < num_epochs:
                     state_handler.finish_epoch()
-                # check that logger, model and optimizer are shared also for state wrapper
 
     logger.finish_run()
-
     state_handler.finish_run()
-
     model.cpu()
-
 
 def main():
     args, _ = get_args()

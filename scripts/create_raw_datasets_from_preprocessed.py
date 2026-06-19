@@ -99,7 +99,7 @@ if __name__ == '__main__':
     out_static = save_with_fallback(static_df, outdir / f"{args.dataset_prefix}_static_features")
     out_edges  = save_with_fallback(edges_df,  outdir / f"{args.dataset_prefix}_edges")
     out_speed  = save_with_fallback(speed_df,  outdir / f"{args.dataset_prefix}_speed")
-    out_volume = save_with_fallback(volume_df, outdir) / f"{args.dataset_prefix}_volume")
+    out_volume = save_with_fallback(volume_df, outdir / f"{args.dataset_prefix}_volume")
 
     # staged = [out_static, out_edges, out_speed, out_volume]
     staged = [out_static]
