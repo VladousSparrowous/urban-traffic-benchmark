@@ -9,9 +9,9 @@ import pickle
 from typing import Any, Dict, Optional
 TorchStateDict = tp.Mapping[str, torch.FloatTensor]
 
+
 class LocalLogger:
  
-    
     def __init__(self, save_dir: str, metric: str = 'MAE', do_not_evaluate_on_test: bool = False):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -348,3 +348,26 @@ def read_memmap(filepath: str,
         filename=filepath, size=number_of_elements, dtype=dtype, shared=False
     ).reshape(shape)
     # return torch.tensor(np.memmap(filename=filepath, dtype="float32", mode="r", shape=shape))
+
+
+def get_parameter_groups(model):
+    no_weight_decay_names = ['bias', 'normalization', 'frequencies']
+
+    parameter_groups = [
+        {
+            'params': [param for name, param in model.named_parameters()
+                       if not any(no_weight_decay_name in name for no_weight_decay_name in no_weight_decay_names)]
+        },
+        {
+            'params': [param for name, param in model.named_parameters()
+                       if any(no_weight_decay_name in name for no_weight_decay_name in no_weight_decay_names)],
+            'weight_decay': 0
+        },
+    ]
+
+    return parameter_groups
+
+
+def _check_dim_and_num_heads_consistency(dim, num_heads):
+    if dim % num_heads != 0:
+        raise ValueError('Dimension mismatch: hidden_dim should be a multiple of num_heads.')
