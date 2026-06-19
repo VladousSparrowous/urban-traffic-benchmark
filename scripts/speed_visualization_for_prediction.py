@@ -13,15 +13,6 @@ python visualize_predictions.py \
     --create-animation
 """
 
-"""
-Визуализация предсказаний модели скорости на карте OSM.
-Сравнение предсказанных значений с реальными для валидационных данных.
-"""
-"""
-Визуализация предсказаний модели скорости на карте OSM.
-Сравнение предсказанных значений с реальными для валидационных данных.
-"""
-
 import argparse
 import os
 from pathlib import Path
@@ -41,8 +32,16 @@ from matplotlib import colormaps
 import branca.colormap as branca_cm
 
 
+
+
 class TrafficPredictionVisualizer:
     """Визуализатор предсказаний скорости трафика."""
+    
+    # Палитра цветов для разных категорий
+    PALETTE = [
+        "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", 
+        "#ff7f00", "#a65628", "#f781bf", "#999999"
+    ]
     
     def __init__(
         self,
@@ -50,8 +49,7 @@ class TrafficPredictionVisualizer:
         predictions_path: Path,
         targets_path: Path,
         output_dir: Path,
-        nan_mask_path: Optional[Path] = None,
-        target_index: int = 0
+        nan_mask_path: Optional[Path] = None
     ):
         """
         Args:
@@ -60,7 +58,6 @@ class TrafficPredictionVisualizer:
             targets_path: Путь к .pt файлу с реальными значениями
             output_dir: Директория для сохранения результатов
             nan_mask_path: Путь к .pt файлу с маской NaN (опционально)
-            target_index: Индекс таргета для визуализации (если их несколько)
         """
         self.dataset_path = Path(dataset_npz_path)
         self.predictions_path = Path(predictions_path)
@@ -68,7 +65,6 @@ class TrafficPredictionVisualizer:
         self.nan_mask_path = Path(nan_mask_path) if nan_mask_path else None
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.target_index = target_index
         
         # Загружаем данные
         self._load_data()
@@ -79,15 +75,11 @@ class TrafficPredictionVisualizer:
         
         # Загружаем датасет
         with np.load(self.dataset_path, allow_pickle=True) as data:
-            print(f"Available keys: {list(data.keys())}")
-            
             self.spatial_features = data['spatial_node_features'].astype(np.float32)
             self.edge_index = data['edges']
             
-            print(f"spatial_features shape: {self.spatial_features.shape}")
-            print(f"edges shape: {self.edge_index.shape}")
-            
-            # Получаем количество узлов
+            # Получаем количество узлов из формы spatial_features
+            # spatial_features может иметь форму (1, num_nodes, num_features) или (num_nodes, num_features)
             if self.spatial_features.ndim == 3:
                 self.num_nodes = self.spatial_features.shape[1]
             else:
@@ -95,104 +87,64 @@ class TrafficPredictionVisualizer:
             
             # Определяем индексы координат
             self._detect_coordinate_indices(data)
-            print(f"Coordinate indices: {self.coord_indices}")
             
             # Загружаем временные метки для валидации
             self.val_timestamps = data['val_timestamps']
-            print(f"val_timestamps shape: {self.val_timestamps.shape}")
             
         # Загружаем предсказания и таргеты
-        print(f"Loading predictions from {self.predictions_path}...")
         self.predictions = torch.load(self.predictions_path, map_location='cpu')
-        print(f"Loading targets from {self.targets_path}...")
         self.targets = torch.load(self.targets_path, map_location='cpu')
         
-        print(f"predictions shape: {self.predictions.shape}")
-        print(f"targets shape: {self.targets.shape}")
-        
-        # Обработка 3D данных (если есть несколько таргетов)
-        if self.predictions.ndim == 3:
-            print(f"Predictions are 3D with shape {self.predictions.shape}")
-            print(f"Using target_index={self.target_index}")
-            self.predictions = self.predictions[:, :, self.target_index]
-            print(f"After selection: predictions shape {self.predictions.shape}")
-        
-        if self.targets.ndim == 3:
-            print(f"Targets are 3D with shape {self.targets.shape}")
-            self.targets = self.targets[:, :, self.target_index]
-            print(f"After selection: targets shape {self.targets.shape}")
-        
-        # Проверяем соответствие размеров
-        if self.predictions.shape[1] != self.num_nodes:
-            print(f"WARNING: predictions num_nodes ({self.predictions.shape[1]}) != dataset num_nodes ({self.num_nodes})")
-            # Если predictions имеют больше узлов, берем первые num_nodes
-            if self.predictions.shape[1] > self.num_nodes:
-                self.predictions = self.predictions[:, :self.num_nodes]
-                self.targets = self.targets[:, :self.num_nodes]
-                print(f"Trimmed to {self.num_nodes} nodes")
-        
-        # Создаем маску NaN
         if self.nan_mask_path and self.nan_mask_path.exists():
             self.nan_mask = torch.load(self.nan_mask_path, map_location='cpu')
-            if self.nan_mask.ndim == 3:
-                self.nan_mask = self.nan_mask[:, :, self.target_index]
-            print(f"nan_mask shape: {self.nan_mask.shape}")
         else:
             self.nan_mask = torch.isnan(self.targets)
-            print("Created nan_mask from targets")
             
-        print(f"Final shapes - predictions: {self.predictions.shape}, targets: {self.targets.shape}")
+        print(f"Loaded predictions shape: {self.predictions.shape}")
+        print(f"Loaded targets shape: {self.targets.shape}")
         print(f"Number of nodes: {self.num_nodes}")
         
         # Получаем координаты всех узлов
         self.node_coords = self._get_node_coordinates()
-        print(f"node_coords shape: {self.node_coords.shape}")
-        print(f"node_coords sample (first 5 nodes):\n{self.node_coords[:5]}")
-        
-        # Проверяем, что координаты имеют разумные значения
-        coord_std = np.std(self.node_coords, axis=0)
-        print(f"Coordinate std: {coord_std}")
-        if np.any(coord_std < 1e-6):
-            print("WARNING: Some coordinates have zero variance!")
         
     def _detect_coordinate_indices(self, data):
         """Определяет индексы координатных признаков."""
         feature_names = [str(v) for v in data['spatial_node_feature_names'].tolist()]
-        print(f"Available feature names: {feature_names}")
         
-        # Ищем координатные признаки
+        # Пытаемся найти индексы координат
+        coord_names = ['x_coordinate_start', 'y_coordinate_start', 
+                       'x_coordinate_end', 'y_coordinate_end']
         self.coord_indices = {}
         
-        coord_mappings = {
-            'x_coordinate_start': ['x_coordinate_start', 'x_coordinate', 'lon', 'longitude', 'x', 'x_start', 'start_lon'],
-            'y_coordinate_start': ['y_coordinate_start', 'y_coordinate', 'lat', 'latitude', 'y', 'y_start', 'start_lat'],
-            'x_coordinate_end': ['x_coordinate_end', 'lon_end', 'x_end', 'end_lon'],
-            'y_coordinate_end': ['y_coordinate_end', 'lat_end', 'y_end', 'end_lat']
-        }
-        
-        for coord_name, alternatives in coord_mappings.items():
-            found = False
-            for alt in alternatives:
-                if alt in feature_names:
-                    self.coord_indices[coord_name] = feature_names.index(alt)
-                    found = True
-                    print(f"Found {coord_name} as '{alt}' at index {feature_names.index(alt)}")
-                    break
-            
-            if not found:
-                # Fallback
-                if coord_name == 'x_coordinate_start':
-                    self.coord_indices[coord_name] = 22  # Известно из данных
-                    print(f"Using fallback: {coord_name} -> index 22")
-                elif coord_name == 'y_coordinate_start':
-                    self.coord_indices[coord_name] = 23  # Известно из данных
-                    print(f"Using fallback: {coord_name} -> index 23")
-                elif coord_name == 'x_coordinate_end':
-                    self.coord_indices[coord_name] = 24
-                    print(f"Using fallback: {coord_name} -> index 24")
-                elif coord_name == 'y_coordinate_end':
-                    self.coord_indices[coord_name] = 25
-                    print(f"Using fallback: {coord_name} -> index 25")
+        for name in coord_names:
+            if name in feature_names:
+                self.coord_indices[name] = feature_names.index(name)
+            else:
+                # Пробуем альтернативные имена
+                alt_names = {
+                    'x_coordinate_start': ['x_coordinate', 'lon', 'longitude', 'x'],
+                    'y_coordinate_start': ['y_coordinate', 'lat', 'latitude', 'y'],
+                    'x_coordinate_end': ['x_coordinate_end', 'lon_end', 'x_end'],
+                    'y_coordinate_end': ['y_coordinate_end', 'lat_end', 'y_end']
+                }
+                found = False
+                for alt in alt_names.get(name, []):
+                    if alt in feature_names:
+                        self.coord_indices[name] = feature_names.index(alt)
+                        found = True
+                        break
+                if not found:
+                    # Если координаты не найдены, пробуем использовать первые два признака как координаты
+                    if name == 'x_coordinate_start':
+                        self.coord_indices[name] = 0
+                    elif name == 'y_coordinate_start':
+                        self.coord_indices[name] = 1
+                    elif name == 'x_coordinate_end':
+                        self.coord_indices[name] = 0
+                    elif name == 'y_coordinate_end':
+                        self.coord_indices[name] = 1
+                    else:
+                        raise ValueError(f"Coordinate feature '{name}' not found. Available: {feature_names}")
         
     def _get_node_coordinates(self) -> np.ndarray:
         """Извлекает координаты узлов из пространственных признаков."""
@@ -200,13 +152,10 @@ class TrafficPredictionVisualizer:
         if spatial.ndim == 3:
             spatial = spatial[0]
             
-        x_start_idx = self.coord_indices.get('x_coordinate_start', 22)
-        y_start_idx = self.coord_indices.get('y_coordinate_start', 23)
+        x_start_idx = self.coord_indices['x_coordinate_start']
+        y_start_idx = self.coord_indices['y_coordinate_start']
         
-        print(f"Using indices: x_start={x_start_idx}, y_start={y_start_idx}")
-        print(f"Spatial shape: {spatial.shape}")
-        
-        # Возвращаем координаты (широта, долгота) - folium ожидает (lat, lon)
+        # Возвращаем координаты (долгота, широта) - folium ожидает (lat, lon)
         coords = np.zeros((self.num_nodes, 2))
         coords[:, 0] = spatial[:, y_start_idx]  # latitude
         coords[:, 1] = spatial[:, x_start_idx]  # longitude
@@ -214,57 +163,42 @@ class TrafficPredictionVisualizer:
         return coords
     
     def _get_timestamp_for_visualization(self) -> int:
-        """Выбирает временную метку для визуализации."""
+        """
+        Выбирает временную метку для визуализации.
+        Использует среднюю метку из валидационного набора.
+        """
         if len(self.val_timestamps) == 0:
             return 0
         
-        # Выбираем среднюю временную метку
+        # Выбираем среднюю временную метку для визуализации
         mid_idx = len(self.val_timestamps) // 2
         return int(self.val_timestamps[mid_idx])
     
     def prepare_data_for_timestamp(self, timestamp_idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Подготавливает данные для указанной временной метки.
+        
+        Returns:
+            preds: Предсказания для всех узлов
+            targets: Реальные значения для всех узлов
+            mask: Маска валидных значений
         """
-        # Проверяем, что индекс валиден
+        # Валидационные данные имеют форму [num_timestamps, num_nodes]
         if timestamp_idx >= self.targets.shape[0]:
             timestamp_idx = self.targets.shape[0] - 1
-        
-        # Извлекаем данные
-        preds = self.predictions[timestamp_idx]
-        targets = self.targets[timestamp_idx]
-        mask = ~self.nan_mask[timestamp_idx]
-        
-        # Преобразуем в numpy
-        if torch.is_tensor(preds):
-            preds = preds.numpy()
-        if torch.is_tensor(targets):
-            targets = targets.numpy()
-        if torch.is_tensor(mask):
-            mask = mask.numpy()
-        
-        # Убеждаемся, что размеры совпадают
-        if len(preds) != self.num_nodes:
-            print(f"WARNING: predictions length ({len(preds)}) != num_nodes ({self.num_nodes})")
-            if len(preds) > self.num_nodes:
-                preds = preds[:self.num_nodes]
-                targets = targets[:self.num_nodes]
-                mask = mask[:self.num_nodes]
-            else:
-                preds = np.pad(preds, (0, self.num_nodes - len(preds)))
-                targets = np.pad(targets, (0, self.num_nodes - len(targets)))
-                mask = np.pad(mask, (0, self.num_nodes - len(mask)), constant_values=False)
-        
-        valid_count = np.sum(mask)
-        print(f"Timestamp {timestamp_idx}: {valid_count} valid nodes out of {self.num_nodes}")
+            
+        preds = self.predictions[timestamp_idx].numpy() if torch.is_tensor(self.predictions) else self.predictions[timestamp_idx]
+        targets = self.targets[timestamp_idx].numpy() if torch.is_tensor(self.targets) else self.targets[timestamp_idx]
+        mask = ~(self.nan_mask[timestamp_idx].numpy() if torch.is_tensor(self.nan_mask) else self.nan_mask[timestamp_idx])
         
         return preds, targets, mask
     
-    def create_speed_color_map(self, values: np.ndarray) -> branca_cm.LinearColormap:
+    def create_speed_color_map(self, values: np.ndarray, cmap_name: str = 'RdYlGn_r') -> branca_cm.LinearColormap:
         """Создает цветовую карту для значений скорости."""
         vmin = np.nanmin(values)
         vmax = np.nanmax(values)
         
+        # Добавляем небольшой отступ
         vmin = max(0, vmin - 5)
         vmax = vmax + 5
         
@@ -277,17 +211,8 @@ class TrafficPredictionVisualizer:
     
     def create_error_color_map(self, errors: np.ndarray) -> branca_cm.LinearColormap:
         """Создает цветовую карту для ошибок предсказания."""
-        valid_errors = errors[~np.isnan(errors)]
-        if len(valid_errors) == 0:
-            return branca_cm.LinearColormap(
-                colors=['green', 'yellow', 'red'],
-                vmin=0,
-                vmax=10,
-                caption='Prediction Error (km/h)'
-            )
-        
         vmin = 0
-        vmax = np.percentile(valid_errors, 95)
+        vmax = np.percentile(errors[~np.isnan(errors)], 95) if np.any(~np.isnan(errors)) else 10
         
         return branca_cm.LinearColormap(
             colors=['green', 'yellow', 'red'],
@@ -304,30 +229,30 @@ class TrafficPredictionVisualizer:
     ) -> folium.Map:
         """
         Создает карту с визуализацией предсказаний для указанной временной метки.
+        
+        Args:
+            timestamp_idx: Индекс временной метки (если None - выбирается автоматически)
+            save_html: Сохранять ли HTML файл
+            show_errors: Отображать ли ошибки предсказания отдельным слоем
+            
+        Returns:
+            folium.Map: Карта с визуализацией
         """
         if timestamp_idx is None:
             timestamp_idx = self._get_timestamp_for_visualization()
             
         print(f"Visualizing timestamp {timestamp_idx}...")
         
+        # Получаем данные для выбранной временной метки
         preds, targets, mask = self.prepare_data_for_timestamp(timestamp_idx)
         
-        if not np.any(mask):
-            print("WARNING: No valid data found!")
-            return folium.Map(location=[0, 0], zoom_start=2)
-        
+        # Вычисляем ошибки
         errors = np.abs(preds - targets)
         errors[~mask] = np.nan
         
         # Определяем центр карты
-        valid_coords = self.node_coords[mask]
-        if len(valid_coords) == 0:
-            print("WARNING: No valid coordinates found!")
-            return folium.Map(location=[0, 0], zoom_start=2)
-            
-        center_lat = float(np.mean(valid_coords[:, 0]))
-        center_lon = float(np.mean(valid_coords[:, 1]))
-        print(f"Map center: ({center_lat}, {center_lon})")
+        center_lat = float(np.mean(self.node_coords[:, 0]))
+        center_lon = float(np.mean(self.node_coords[:, 1]))
         
         # Создаем карту
         m = folium.Map(
@@ -340,24 +265,20 @@ class TrafficPredictionVisualizer:
         # Создаем цветовые карты
         valid_speeds = targets[mask]
         valid_preds = preds[mask]
-        
-        if len(valid_speeds) == 0:
-            print("WARNING: No valid speeds found!")
-            return m
-            
         all_speeds = np.concatenate([valid_speeds, valid_preds])
         speed_cmap = self.create_speed_color_map(all_speeds)
         error_cmap = self.create_error_color_map(errors[mask])
         
-        # Группы слоев
+        # Создаем группы слоев
         fg_targets = folium.FeatureGroup(name='Real Speed', show=True)
         fg_predictions = folium.FeatureGroup(name='Predicted Speed', show=False)
         fg_errors = folium.FeatureGroup(name='Prediction Error', show=False)
         fg_links = folium.FeatureGroup(name='Road Links', show=True)
         
-        # Добавляем дорожные сегменты
+        # Добавляем дорожные сегменты (связи между узлами)
         if self.edge_index is not None and len(self.edge_index) > 0:
-            max_edges = 2000
+            # Ограничиваем количество отображаемых ребер для производительности
+            max_edges = 5000
             edges_to_plot = self.edge_index[:max_edges] if len(self.edge_index) > max_edges else self.edge_index
             
             for i, (u, v) in enumerate(edges_to_plot):
@@ -365,30 +286,24 @@ class TrafficPredictionVisualizer:
                 if u < self.num_nodes and v < self.num_nodes:
                     start = self.node_coords[u]
                     end = self.node_coords[v]
-                    if np.isfinite(start).all() and np.isfinite(end).all():
-                        folium.PolyLine(
-                            locations=[(start[0], start[1]), (end[0], end[1])],
-                            color='#888888',
-                            weight=1,
-                            opacity=0.3
-                        ).add_to(fg_links)
+                    folium.PolyLine(
+                        locations=[(start[0], start[1]), (end[0], end[1])],
+                        color='#888888',
+                        weight=1,
+                        opacity=0.3
+                    ).add_to(fg_links)
         
-        # Добавляем узлы
+        # Добавляем узлы с реальными значениями
         for i in range(self.num_nodes):
             if not mask[i]:
                 continue
                 
             lat, lon = self.node_coords[i]
-            if not np.isfinite(lat) or not np.isfinite(lon):
-                continue
-                
             true_speed = targets[i]
             pred_speed = preds[i]
             error = errors[i]
             
-            if np.isnan(true_speed) or np.isnan(pred_speed):
-                continue
-            
+            # Создаем маркер с реальным значением
             popup_text = f"""
             <b>Node {i}</b><br>
             Real Speed: {true_speed:.1f} km/h<br>
@@ -396,7 +311,7 @@ class TrafficPredictionVisualizer:
             Error: {error:.1f} km/h
             """
             
-            # Реальная скорость
+            # Маркер для реального значения
             folium.CircleMarker(
                 location=(lat, lon),
                 radius=5,
@@ -407,7 +322,7 @@ class TrafficPredictionVisualizer:
                 popup=folium.Popup(popup_text, max_width=200)
             ).add_to(fg_targets)
             
-            # Предсказанная скорость
+            # Маркер для предсказания
             folium.CircleMarker(
                 location=(lat, lon),
                 radius=3,
@@ -418,7 +333,7 @@ class TrafficPredictionVisualizer:
                 popup=folium.Popup(popup_text, max_width=200)
             ).add_to(fg_predictions)
             
-            # Ошибка
+            # Маркер для ошибки (если включено)
             if show_errors:
                 folium.CircleMarker(
                     location=(lat, lon),
@@ -430,23 +345,24 @@ class TrafficPredictionVisualizer:
                     popup=folium.Popup(f"Error: {error:.1f} km/h", max_width=200)
                 ).add_to(fg_errors)
         
-        # Добавляем слои на карту
+        # Добавляем группы слоев на карту
         fg_links.add_to(m)
         fg_targets.add_to(m)
         fg_predictions.add_to(m)
         if show_errors:
             fg_errors.add_to(m)
         
+        # Добавляем цветовые шкалы
         speed_cmap.add_to(m)
+        
+        # Добавляем контроллер слоев
         folium.LayerControl(collapsed=False).add_to(m)
         
+        # Сохраняем HTML
         if save_html:
             html_filename = self.output_dir / f'predictions_timestamp_{timestamp_idx}.html'
-            try:
-                m.save(str(html_filename))
-                print(f"✅ Map saved to {html_filename}")
-            except Exception as e:
-                print(f"❌ Error saving map: {e}")
+            m.save(str(html_filename))
+            print(f"Map saved to {html_filename}")
             
         return m
     
@@ -455,13 +371,15 @@ class TrafficPredictionVisualizer:
         num_timestamps: int = 4,
         save_html: bool = True
     ) -> None:
-        """Создает сетку карт для нескольких временных меток."""
+        """
+        Создает сетку карт для нескольких временных меток.
+        """
+        # Выбираем равномерно распределенные временные метки
         total_timestamps = self.targets.shape[0]
         if num_timestamps > total_timestamps:
             num_timestamps = total_timestamps
             
         indices = np.linspace(0, total_timestamps - 1, num_timestamps, dtype=int)
-        print(f"Visualizing timestamps: {indices}")
         
         for idx in indices:
             self.visualize_predictions_at_timestamp(
@@ -507,197 +425,339 @@ class TrafficPredictionVisualizer:
             json.dump(all_data, f, indent=2)
         print(f"✅ Animation data saved to {json_path}")
         
+        # Создаем HTML с встроенными данными
         self._create_animation_html(output_dir)
     
     def _create_animation_html(self, output_dir: Path):
-        """Создает HTML шаблон для анимации."""
-        html_content = '''<!DOCTYPE html>
-<html>
-<head>
-    <title>Traffic Speed Animation</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-        body { margin:0; padding:0; font-family: Arial, sans-serif; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
-        #controls {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1000;
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-            text-align: center;
-            min-width: 300px;
-        }
-        #controls input { width: 80%; margin: 10px 0; }
-        #controls label { display: inline-block; margin: 0 5px; }
-        #legend {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 1000;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            font-size: 12px;
-        }
-        .legend-item { display: flex; align-items: center; margin: 2px 0; }
-        .legend-color { width: 20px; height: 10px; margin-right: 5px; border-radius: 2px; }
-        #info {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            z-index: 1000;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            font-size: 14px;
-        }
-    </style>
-</head>
-<body>
-    <div id="map"></div>
-    <div id="info"><strong>Timestamp: <span id="timestamp-label">0</span></strong></div>
-    <div id="legend">
-        <div class="legend-item"><div class="legend-color" style="background: #4CAF50;"></div><span>Low Speed (0-30 km/h)</span></div>
-        <div class="legend-item"><div class="legend-color" style="background: #FFC107;"></div><span>Medium Speed (30-60 km/h)</span></div>
-        <div class="legend-item"><div class="legend-color" style="background: #F44336;"></div><span>High Speed (60+ km/h)</span></div>
-    </div>
-    <div id="controls">
-        <label>Play</label>
-        <button id="play-btn">▶</button>
-        <br>
-        <label>Timestamp: <span id="timestamp-display">0</span></label>
-        <input type="range" id="timeline" min="0" max="0" value="0" step="1">
-    </div>
-    <script>
-        let animationData = [];
-        fetch('animation_data.json')
-            .then(response => response.json())
-            .then(data => { animationData = data; initializeMap(); })
-            .catch(error => { console.error('Error loading data:', error); });
+        """Создает HTML шаблон для анимации с встроенными данными."""
         
-        let map, markers, currentIndex = 0, isPlaying = false, playInterval = null;
+        # Загружаем данные из JSON
+        json_path = output_dir / 'animation_data.json'
+        if not json_path.exists():
+            print(f"❌ animation_data.json not found at {json_path}")
+            return
         
-        function getSpeedColor(speed) {
-            if (speed < 30) return '#4CAF50';
-            if (speed < 60) return '#FFC107';
-            return '#F44336';
-        }
+        with open(json_path, 'r') as f:
+            data = json.load(f)
         
-        function initializeMap() {
-            if (animationData.length === 0) return;
-            const firstData = animationData[0];
-            const nodes = firstData.nodes;
-            if (nodes.length === 0) return;
-            
-            let latSum = 0, lonSum = 0;
-            nodes.forEach(n => { latSum += n.lat; lonSum += n.lon; });
-            const centerLat = latSum / nodes.length;
-            const centerLon = lonSum / nodes.length;
-            
-            map = L.map('map').setView([centerLat, centerLon], 11);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap'
-            }).addTo(map);
-            
-            markers = [];
-            nodes.forEach((node, i) => {
-                const circle = L.circleMarker([node.lat, node.lon], {
-                    radius: 6,
-                    color: getSpeedColor(node.true_speed),
-                    fillColor: getSpeedColor(node.true_speed),
-                    fillOpacity: 0.8,
-                    weight: 2
-                }).addTo(map);
-                circle.bindPopup(`<b>Node ${node.node_id}</b><br>Real Speed: ${node.true_speed.toFixed(1)} km/h<br>Pred Speed: ${node.pred_speed.toFixed(1)} km/h<br>Error: ${node.error.toFixed(1)} km/h`);
-                markers.push(circle);
-            });
-            
-            document.getElementById('timeline').max = animationData.length - 1;
-            document.getElementById('timeline').value = 0;
-            updateTimestamp(0);
-            
-            document.getElementById('timeline').addEventListener('input', function() {
-                updateTimestamp(parseInt(this.value));
-            });
-            document.getElementById('play-btn').addEventListener('click', togglePlay);
-        }
+        # Преобразуем данные в JSON строку для встраивания
+        json_data = json.dumps(data)
         
-        function updateTimestamp(idx) {
-            if (!animationData || idx >= animationData.length) return;
-            currentIndex = idx;
-            const data = animationData[idx];
-            document.getElementById('timestamp-display').textContent = idx;
-            document.getElementById('timestamp-label').textContent = idx;
-            document.getElementById('timeline').value = idx;
-            data.nodes.forEach((node, i) => {
-                if (i < markers.length) {
-                    const color = getSpeedColor(node.true_speed);
-                    markers[i].setStyle({ color: color, fillColor: color });
-                }
-            });
-        }
-        
-        function togglePlay() {
-            isPlaying = !isPlaying;
-            document.getElementById('play-btn').textContent = isPlaying ? '⏸' : '▶';
-            if (isPlaying) {
-                playInterval = setInterval(() => {
-                    let nextIdx = currentIndex + 1;
-                    if (nextIdx >= animationData.length) nextIdx = 0;
-                    updateTimestamp(nextIdx);
-                }, 500);
-            } else {
-                clearInterval(playInterval);
-            }
-        }
-    </script>
-</body>
-</html>'''
+        html_content = f'''<!DOCTYPE html>
+    <html>
+    <head>
+        <title>Traffic Speed Animation</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>
+            body {{ margin:0; padding:0; font-family: Arial, sans-serif; }}
+            #map {{ position: absolute; top: 0; bottom: 0; width: 100%; }}
+            #controls {{
+                position: absolute;
+                bottom: 30px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 1000;
+                background: white;
+                padding: 15px 25px;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                text-align: center;
+                min-width: 350px;
+            }}
+            #controls input {{ width: 80%; margin: 10px 0; cursor: pointer; }}
+            #controls label {{ display: inline-block; margin: 0 5px; font-size: 14px; }}
+            #controls button {{
+                padding: 5px 20px;
+                font-size: 16px;
+                cursor: pointer;
+                background: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                margin: 5px 0;
+            }}
+            #controls button:hover {{ background: #45a049; }}
+            #legend {{
+                position: absolute;
+                bottom: 100px;
+                right: 20px;
+                z-index: 1000;
+                background: white;
+                padding: 12px 15px;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                font-size: 12px;
+                min-width: 150px;
+            }}
+            .legend-item {{ display: flex; align-items: center; margin: 3px 0; }}
+            .legend-color {{ width: 20px; height: 12px; margin-right: 8px; border-radius: 3px; }}
+            #info {{
+                position: absolute;
+                top: 20px;
+                left: 20px;
+                z-index: 1000;
+                background: rgba(255,255,255,0.9);
+                padding: 10px 15px;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                font-size: 14px;
+            }}
+            #stats {{
+                position: absolute;
+                top: 70px;
+                left: 20px;
+                z-index: 1000;
+                background: rgba(255,255,255,0.9);
+                padding: 10px 15px;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                font-size: 12px;
+                max-width: 200px;
+            }}
+            .speed-indicator {{
+                position: absolute;
+                bottom: 110px;
+                left: 20px;
+                z-index: 1000;
+                background: rgba(255,255,255,0.9);
+                padding: 8px 12px;
+                border-radius: 5px;
+                font-size: 13px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <div id="info">
+            <strong>⏱ Timestamp: <span id="timestamp-label">0</span></strong>
+        </div>
+        <div id="stats">
+            <div>📍 Nodes: <span id="node-count">0</span></div>
+            <div>📊 Avg Error: <span id="avg-error">0.0</span> km/h</div>
+        </div>
+        <div class="speed-indicator">
+            🔵 Real Speed &nbsp;|&nbsp; 🔴 Pred Speed
+        </div>
+        <div id="legend">
+            <div style="font-weight:bold;margin-bottom:5px;">Speed Legend</div>
+            <div class="legend-item"><div class="legend-color" style="background: #4CAF50;"></div><span>0 - 30 km/h</span></div>
+            <div class="legend-item"><div class="legend-color" style="background: #FFC107;"></div><span>30 - 60 km/h</span></div>
+            <div class="legend-item"><div class="legend-color" style="background: #F44336;"></div><span>60+ km/h</span></div>
+        </div>
+        <div id="controls">
+            <div style="margin-bottom:5px;">
+                <button id="play-btn">▶ Play</button>
+                <button id="reset-btn">⟲ Reset</button>
+            </div>
+            <div>
+                <span style="font-size:12px;">Speed: <span id="play-speed-label">1x</span></span>
+                <button id="speed-down-btn" style="padding:2px 8px;font-size:12px;">-</button>
+                <button id="speed-up-btn" style="padding:2px 8px;font-size:12px;">+</button>
+            </div>
+            <br>
+            <label>Timestamp: <span id="timestamp-display">0</span> / <span id="max-timestamp">0</span></label>
+            <input type="range" id="timeline" min="0" max="0" value="0" step="1">
+        </div>
+        <script>
+            // Встроенные данные
+            const animationData = {json_data};
+            
+            let map, markers = [], realMarkers = [], predMarkers = [];
+            let currentIndex = 0, isPlaying = false, playInterval = null;
+            let playSpeed = 500; // ms between frames
+            
+            function getSpeedColor(speed) {{
+                if (speed < 30) return '#4CAF50';
+                if (speed < 60) return '#FFC107';
+                return '#F44336';
+            }}
+            
+            function getSpeedColorWithOpacity(speed, opacity=0.8) {{
+                const color = getSpeedColor(speed);
+                // Convert hex to rgba
+                const r = parseInt(color.slice(1,3), 16);
+                const g = parseInt(color.slice(3,5), 16);
+                const b = parseInt(color.slice(5,7), 16);
+                return `rgba(${{r}},${{g}},${{b}},${{opacity}})`;
+            }}
+            
+            function initializeMap() {{
+                if (animationData.length === 0) return;
+                const firstData = animationData[0];
+                const nodes = firstData.nodes;
+                if (nodes.length === 0) return;
+                
+                // Calculate center
+                let latSum = 0, lonSum = 0;
+                nodes.forEach(n => {{ latSum += n.lat; lonSum += n.lon; }});
+                const centerLat = latSum / nodes.length;
+                const centerLon = lonSum / nodes.length;
+                
+                map = L.map('map').setView([centerLat, centerLon], 11);
+                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '© OpenStreetMap'
+                }}).addTo(map);
+                
+                // Create two layers: one for real speed, one for predicted
+                const realLayer = L.layerGroup().addTo(map);
+                const predLayer = L.layerGroup().addTo(map);
+                
+                // Store markers in two separate arrays
+                nodes.forEach((node, i) => {{
+                    // Real speed marker (larger, outer)
+                    const realCircle = L.circleMarker([node.lat, node.lon], {{
+                        radius: 8,
+                        color: getSpeedColor(node.true_speed),
+                        fillColor: getSpeedColor(node.true_speed),
+                        fillOpacity: 0.6,
+                        weight: 2
+                    }}).addTo(realLayer);
+                    realCircle.bindPopup(createPopup(node, 'Real'));
+                    
+                    // Predicted speed marker (smaller, inner)
+                    const predCircle = L.circleMarker([node.lat, node.lon], {{
+                        radius: 4,
+                        color: getSpeedColor(node.pred_speed),
+                        fillColor: getSpeedColor(node.pred_speed),
+                        fillOpacity: 0.9,
+                        weight: 1
+                    }}).addTo(predLayer);
+                    predCircle.bindPopup(createPopup(node, 'Predicted'));
+                    
+                    realMarkers.push(realCircle);
+                    predMarkers.push(predCircle);
+                }});
+                
+                document.getElementById('max-timestamp').textContent = animationData.length - 1;
+                document.getElementById('timeline').max = animationData.length - 1;
+                document.getElementById('timeline').value = 0;
+                updateTimestamp(0);
+                
+                // Event listeners
+                document.getElementById('timeline').addEventListener('input', function() {{
+                    if (isPlaying) togglePlay();
+                    updateTimestamp(parseInt(this.value));
+                }});
+                document.getElementById('play-btn').addEventListener('click', togglePlay);
+                document.getElementById('reset-btn').addEventListener('click', function() {{
+                    if (isPlaying) togglePlay();
+                    document.getElementById('timeline').value = 0;
+                    updateTimestamp(0);
+                }});
+                document.getElementById('speed-down-btn').addEventListener('click', function() {{
+                    playSpeed = Math.min(2000, playSpeed + 200);
+                    updatePlaySpeedLabel();
+                    if (isPlaying) {{
+                        clearInterval(playInterval);
+                        playInterval = setInterval(playNext, playSpeed);
+                    }}
+                }});
+                document.getElementById('speed-up-btn').addEventListener('click', function() {{
+                    playSpeed = Math.max(100, playSpeed - 200);
+                    updatePlaySpeedLabel();
+                    if (isPlaying) {{
+                        clearInterval(playInterval);
+                        playInterval = setInterval(playNext, playSpeed);
+                    }}
+                }});
+            }}
+            
+            function createPopup(node, type) {{
+                return `<b>Node ${{node.node_id}}</b><br>
+                        <b>${{type}} Speed:</b> ${{type === 'Real' ? node.true_speed.toFixed(1) : node.pred_speed.toFixed(1)}} km/h<br>
+                        <b>Error:</b> ${{node.error.toFixed(1)}} km/h`;
+            }}
+            
+            function updateTimestamp(idx) {{
+                if (!animationData || idx >= animationData.length) return;
+                currentIndex = idx;
+                const data = animationData[idx];
+                
+                document.getElementById('timestamp-display').textContent = idx;
+                document.getElementById('timestamp-label').textContent = idx;
+                document.getElementById('timeline').value = idx;
+                document.getElementById('node-count').textContent = data.nodes.length;
+                
+                // Calculate average error
+                let totalError = 0;
+                data.nodes.forEach((node, i) => {{
+                    totalError += node.error;
+                    if (i < realMarkers.length) {{
+                        const realColor = getSpeedColor(node.true_speed);
+                        const predColor = getSpeedColor(node.pred_speed);
+                        realMarkers[i].setStyle({{ color: realColor, fillColor: realColor }});
+                        predMarkers[i].setStyle({{ color: predColor, fillColor: predColor }});
+                    }}
+                }});
+                const avgError = data.nodes.length > 0 ? totalError / data.nodes.length : 0;
+                document.getElementById('avg-error').textContent = avgError.toFixed(1);
+            }}
+            
+            function playNext() {{
+                let nextIdx = currentIndex + 1;
+                if (nextIdx >= animationData.length) {{
+                    nextIdx = 0;
+                }}
+                updateTimestamp(nextIdx);
+            }}
+            
+            function togglePlay() {{
+                isPlaying = !isPlaying;
+                document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+                if (isPlaying) {{
+                    playInterval = setInterval(playNext, playSpeed);
+                }} else {{
+                    clearInterval(playInterval);
+                }}
+            }}
+            
+            function updatePlaySpeedLabel() {{
+                const speed = (1000 / playSpeed).toFixed(1);
+                document.getElementById('play-speed-label').textContent = speed + 'x';
+            }}
+            
+            // Initialize when page loads
+            document.addEventListener('DOMContentLoaded', initializeMap);
+        </script>
+    </body>
+    </html>'''
         
         html_path = output_dir / 'index.html'
-        with open(html_path, 'w') as f:
+        with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         print(f"✅ Animation HTML saved to {html_path}")
+        print(f"📊 Total timestamps: {len(data)}")
+        print(f"📍 Total nodes in first frame: {len(data[0]['nodes']) if data else 0}")
     
     def create_histogram_comparison(self, save_plot: bool = True) -> None:
-        """Создает гистограммы сравнения предсказаний и реальных значений."""
-        print("Creating histogram comparison...")
-        
+        """
+        Создает гистограммы сравнения предсказаний и реальных значений.
+        """
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         
+        # Подготавливаем все данные
         all_preds = []
         all_targets = []
         all_errors = []
+        
+        # Ограничиваем количество временных шагов для анализа
         max_timestamps = min(self.targets.shape[0], 200)
         
         for t in range(max_timestamps):
             preds, targets, mask = self.prepare_data_for_timestamp(t)
-            if np.any(mask):
-                all_preds.extend(preds[mask])
-                all_targets.extend(targets[mask])
-                all_errors.extend(np.abs(preds[mask] - targets[mask]))
+            all_preds.extend(preds[mask])
+            all_targets.extend(targets[mask])
+            all_errors.extend(np.abs(preds[mask] - targets[mask]))
         
-        if len(all_targets) == 0:
-            print("WARNING: No data points collected!")
-            return
-            
         all_preds = np.array(all_preds)
         all_targets = np.array(all_targets)
         all_errors = np.array(all_errors)
         
-        print(f"Collected {len(all_targets)} data points")
-        
-        # Гистограмма скоростей
+        # 1. Гистограмма скоростей
         axes[0, 0].hist(all_targets, bins=50, alpha=0.5, label='Real', color='blue')
         axes[0, 0].hist(all_preds, bins=50, alpha=0.5, label='Predicted', color='red')
         axes[0, 0].set_xlabel('Speed (km/h)')
@@ -705,7 +765,7 @@ class TrafficPredictionVisualizer:
         axes[0, 0].set_title('Speed Distribution Comparison')
         axes[0, 0].legend()
         
-        # Scatter plot
+        # 2. Scatter plot
         axes[0, 1].scatter(all_targets, all_preds, alpha=0.3, s=1)
         axes[0, 1].plot([0, max(all_targets)], [0, max(all_targets)], 'k--', label='Perfect Prediction')
         axes[0, 1].set_xlabel('Real Speed (km/h)')
@@ -713,7 +773,7 @@ class TrafficPredictionVisualizer:
         axes[0, 1].set_title('Prediction vs Reality')
         axes[0, 1].legend()
         
-        # Гистограмма ошибок
+        # 3. Гистограмма ошибок
         axes[1, 0].hist(all_errors, bins=50, color='orange', alpha=0.7)
         axes[1, 0].set_xlabel('Absolute Error (km/h)')
         axes[1, 0].set_ylabel('Frequency')
@@ -721,14 +781,11 @@ class TrafficPredictionVisualizer:
         axes[1, 0].axvline(np.mean(all_errors), color='red', linestyle='--', label=f'Mean: {np.mean(all_errors):.2f}')
         axes[1, 0].legend()
         
-        # Ошибка по времени
+        # 4. Ошибка по временным шагам
         errors_by_time = []
         for t in range(max_timestamps):
             preds, targets, mask = self.prepare_data_for_timestamp(t)
-            if np.any(mask):
-                errors_by_time.append(np.mean(np.abs(preds[mask] - targets[mask])))
-            else:
-                errors_by_time.append(np.nan)
+            errors_by_time.append(np.mean(np.abs(preds[mask] - targets[mask])))
         
         axes[1, 1].plot(errors_by_time, marker='o', markersize=2)
         axes[1, 1].set_xlabel('Timestamp')
@@ -741,119 +798,6 @@ class TrafficPredictionVisualizer:
         if save_plot:
             plot_path = self.output_dir / 'prediction_analysis.png'
             plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-            print(f"✅ Saved analysis plot to {plot_path}")
+            print(f"Saved analysis plot to {plot_path}")
         
-        plt.close()
-        print("Histogram comparison completed")
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize traffic speed predictions on OSM map"
-    )
-    parser.add_argument(
-        "--dataset", 
-        type=Path, 
-        required=True,
-        help="Path to dataset NPZ file"
-    )
-    parser.add_argument(
-        "--predictions",
-        type=Path,
-        required=True,
-        help="Path to predictions PT file"
-    )
-    parser.add_argument(
-        "--targets",
-        type=Path,
-        required=True,
-        help="Path to targets PT file"
-    )
-    parser.add_argument(
-        "--nan-mask",
-        type=Path,
-        default=None,
-        help="Path to NaN mask PT file (optional)"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default="./visualization_output",
-        help="Output directory for visualizations"
-    )
-    parser.add_argument(
-        "--target-index",
-        type=int,
-        default=0,
-        help="Target index to visualize (if multiple targets)"
-    )
-    parser.add_argument(
-        "--timestamp",
-        type=int,
-        default=None,
-        help="Specific timestamp index to visualize"
-    )
-    parser.add_argument(
-        "--num-timestamps",
-        type=int,
-        default=4,
-        help="Number of timestamps for grid visualization"
-    )
-    parser.add_argument(
-        "--create-animation",
-        action="store_true",
-        help="Create animation data"
-    )
-    parser.add_argument(
-        "--create-plots",
-        action="store_true",
-        help="Create statistical analysis plots"
-    )
-    
-    args = parser.parse_args()
-    
-    print("="*50)
-    print("Traffic Prediction Visualizer")
-    print("="*50)
-    print(f"Dataset: {args.dataset}")
-    print(f"Predictions: {args.predictions}")
-    print(f"Targets: {args.targets}")
-    print(f"Target index: {args.target_index}")
-    print(f"Output dir: {args.output_dir}")
-    print("="*50)
-    
-    visualizer = TrafficPredictionVisualizer(
-        dataset_npz_path=args.dataset,
-        predictions_path=args.predictions,
-        targets_path=args.targets,
-        output_dir=args.output_dir,
-        nan_mask_path=args.nan_mask,
-        target_index=args.target_index
-    )
-    
-    if args.timestamp is not None:
-        visualizer.visualize_predictions_at_timestamp(
-            timestamp_idx=args.timestamp,
-            save_html=True,
-            show_errors=True
-        )
-    else:
-        visualizer.visualize_comparison_grid(
-            num_timestamps=args.num_timestamps,
-            save_html=True
-        )
-    
-    if args.create_animation:
-        visualizer.create_animation_data()
-    
-    if args.create_plots:
-        visualizer.create_histogram_comparison()
-    
-    print("\n" + "="*50)
-    print("✅ All visualizations completed!")
-    print(f"📁 Output directory: {args.output_dir}")
-    print("="*50)
-
-
-if __name__ == "__main__":
-    main()
+        plt.show()
