@@ -9,8 +9,8 @@ python visualize_predictions.py \
     --predictions /path/to/val_predictions.pt \
     --targets /path/to/val_targets.pt \
     --output-dir ./visualization_output \
-    --create-plots \
-    --create-animation
+
+
 """
 
 import argparse
@@ -23,25 +23,16 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import folium
-from folium import plugins
-from folium.plugins import HeatMap, MarkerCluster
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import Normalize
-from matplotlib import colormaps
 import branca.colormap as branca_cm
 
 
 
 
 class TrafficPredictionVisualizer:
-    """Визуализатор предсказаний скорости трафика."""
-    
-    # Палитра цветов для разных категорий
-    PALETTE = [
-        "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", 
-        "#ff7f00", "#a65628", "#f781bf", "#999999"
-    ]
+
     
     def __init__(
         self,
@@ -51,29 +42,19 @@ class TrafficPredictionVisualizer:
         output_dir: Path,
         nan_mask_path: Optional[Path] = None
     ):
-        """
-        Args:
-            dataset_npz_path: Путь к .npz файлу с данными датасета
-            predictions_path: Путь к .pt файлу с предсказаниями
-            targets_path: Путь к .pt файлу с реальными значениями
-            output_dir: Директория для сохранения результатов
-            nan_mask_path: Путь к .pt файлу с маской NaN (опционально)
-        """
+
         self.dataset_path = Path(dataset_npz_path)
         self.predictions_path = Path(predictions_path)
         self.targets_path = Path(targets_path)
         self.nan_mask_path = Path(nan_mask_path) if nan_mask_path else None
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Загружаем данные
+
         self._load_data()
         
     def _load_data(self):
-        """Загружает все необходимые данные."""
         print("Loading data...")
-        
-        # Загружаем датасет
+
         with np.load(self.dataset_path, allow_pickle=True) as data:
             self.spatial_features = data['spatial_node_features'].astype(np.float32)
             self.edge_index = data['edges']
