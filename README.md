@@ -1,3 +1,13 @@
+# kaggle friendly fork with visualisation scripts, logs and saving checkpoint
+
+'''{bash}
+!python scripts/speed_visualization_for_prediction.py \
+    --dataset $DATASET \
+    --predictions dir/val_predictions.pt \
+    --targets dir/val_targets.pt \
+    --output-dir out \
+    --all
+'''
 # Metropolis-Scale Road Network Datasets for Fine-Grained Urban Traffic Modeling
 
 [![arXiv](https://shields.io/badge/arXiv-2510.02278-red.svg)](https://arxiv.org/abs/2510.02278)
